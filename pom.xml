@@ -17,8 +17,8 @@
 
   <packaging>jar</packaging>
 
-  <name>vertx.js</name>
-  <description>A Vert.x verticle factory for JavaScript</description>
+  <name>hot reload web handler</name>
+  <description>A Vert.x web handler for hot reload</description>
 
   <issueManagement>
     <url>https://github.com/pmlopes/hot-reload/issues</url>
