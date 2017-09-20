@@ -20,11 +20,12 @@ package xyz.jetdrone.vertx.hot.reload;
 
 import io.vertx.codegen.annotations.VertxGen;
 import io.vertx.core.Handler;
-import io.vertx.core.http.HttpMethod;
-import io.vertx.core.json.JsonObject;
 import io.vertx.ext.web.RoutingContext;
+import io.vertx.ext.web.handler.StaticHandler;
+import xyz.jetdrone.vertx.hot.reload.impl.HotReloadImpl;
 
-import java.util.UUID;
+import java.lang.reflect.Method;
+import java.lang.reflect.Proxy;
 
 /**
  * A Simple Hot Reload for Eclipse Vert.x Web.
@@ -42,67 +43,6 @@ import java.util.UUID;
  */
 @VertxGen
 public interface HotReload extends Handler<RoutingContext> {
-
-  // language=JavaScript
-  String SCRIPT =
-    "(function () {\n" +
-      "    var lastUpdate = -1;\n" +
-      "    var forceReload = false;\n" +
-      "\n" +
-      "    var load = function () {\n" +
-      "      var xobj = new XMLHttpRequest();\n" +
-      "      xobj.overrideMimeType(\"application/json\");\n" +
-      "      xobj.open('GET', \"/hot-reload\", true);\n" +
-      "      xobj.onreadystatechange = function () {\n" +
-      "        if (xobj.readyState === 4) {\n" +
-      "          if (xobj.status != \"200\") {\n" +
-      "            forceReload = true;\n" +
-      "            // recheck in a second\n" +
-      "            setTimeout(load, 1000);\n" +
-      "          } else {\n" +
-      "            var json = JSON.parse(xobj.responseText);\n" +
-      "            if (lastUpdate === -1) {\n" +
-      "              lastUpdate = json.uuid;\n" +
-      "            }\n" +
-      "            if (forceReload || lastUpdate !== json.uuid) {\n" +
-      "              window.location.reload();\n" +
-      "            } else {\n" +
-      "              // recheck in a second\n" +
-      "              setTimeout(load, 1000);\n" +
-      "            }\n" +
-      "          }\n" +
-      "        }\n" +
-      "      };\n" +
-      "      xobj.send(null);\n" +
-      "    };\n" +
-      "\n" +
-      "    load();\n" +
-      "  })();";
-
-  // language=JavaScript
-  String SSE_SCRIPT =
-    "(function () {\n" +
-      "  var lastUpdate = -1;\n" +
-      "  var load = function () {\n" +
-      "    var hotReloadSSE = new EventSource(\"/hot-reload\");\n" +
-      "\n" +
-      "    hotReloadSSE.addEventListener(\"reload\", function (e) {\n" +
-      "      var json = JSON.parse(e.data);\n" +
-      "      if (lastUpdate === -1) {\n" +
-      "        lastUpdate = json.uuid;\n" +
-      "      }\n" +
-      "      if (lastUpdate !== json.uuid) {\n" +
-      "        window.location.reload();\n" +
-      "      }\n" +
-      "    }, false);\n" +
-      "\n" +
-      "    hotReloadSSE.onerror = function () {\n" +
-      "      // recheck in a second\n" +
-      "      setTimeout(load, 1000);\n" +
-      "    }\n" +
-      "  };\n" +
-      "  load();\n" +
-      "})();\n";
 
   /**
    * Creates a HotReload Handler that will setup 2 endpoints:
@@ -128,39 +68,32 @@ public interface HotReload extends Handler<RoutingContext> {
    * @see #create()
    */
   static HotReload create(boolean sse) {
-    final String payload = new JsonObject().put("uuid", UUID.randomUUID().toString()).encode();
-    return ctx -> {
-      if (ctx.request().method() == HttpMethod.GET) {
-        // the check end point
-        if ("/hot-reload".equals(ctx.request().path())) {
-          if (sse) {
-            ctx.response()
-              .putHeader("Content-Type", "text/event-stream")
-              .putHeader("Cache-Control", "no-cache")
-              .putHeader("Access-Control-Allow-Origin", "*")
-              .setChunked(true)
-              .write(
-                "event: reload\n" +
-                  "data: " + payload + "\n\n");
-          } else {
-            ctx.response()
-              .putHeader("Content-Type", "application/json")
-              .putHeader("Cache-Control", "no-cache")
-              .end(payload);
-          }
-          return;
+    return new HotReloadImpl(sse);
+  }
+
+  /**
+   * Creates a StaticHandler that will be configured to be non cached and point to the path src/main/resouces + webroot
+   * @return StaticHandler
+   */
+  static StaticHandler createStaticHandler() {
+    // the proxied object
+    final StaticHandler staticHandler = StaticHandler.create()
+      .setAllowRootFileSystemAccess(true)
+      .setCachingEnabled(false)
+      .setWebRoot(System.getProperty("user.dir") + "/src/main/resources/" + StaticHandler.DEFAULT_WEB_ROOT);
+
+    // we return a proxy to the static handler to safeguard any calls to setWebroot later on...
+    return (StaticHandler) Proxy.newProxyInstance(
+      StaticHandler.class.getClassLoader(),
+      new Class[]{StaticHandler.class},
+      (Object proxy, Method method, Object[] args) -> {
+        if ("setWebRoot".equals(method.getName())) {
+          staticHandler.setWebRoot(System.getProperty("user.dir") + "/src/main/resources/" + args[0].toString());
+        } else {
+          method.invoke(staticHandler, args);
         }
 
-        // the script end point
-        if ("/hot-reload/script".equals(ctx.request().path())) {
-          ctx.response()
-            .putHeader("Content-Type", "application/javascript")
-            .end(sse ? SSE_SCRIPT : SCRIPT);
-          return;
-        }
-      }
-      // nothing to see here, continue...
-      ctx.next();
-    };
+        return proxy;
+      });
   }
 }
