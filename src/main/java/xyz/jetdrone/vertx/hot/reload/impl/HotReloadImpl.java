@@ -2,8 +2,6 @@ package xyz.jetdrone.vertx.hot.reload.impl;
 
 import io.vertx.core.http.HttpMethod;
 import io.vertx.core.http.HttpServerResponse;
-import io.vertx.core.logging.Logger;
-import io.vertx.core.logging.LoggerFactory;
 import io.vertx.ext.web.RoutingContext;
 import xyz.jetdrone.vertx.hot.reload.HotReload;
 
@@ -25,8 +23,8 @@ public class HotReloadImpl implements HotReload {
       "      xobj.overrideMimeType(\"application/json\");\n" +
       "      xobj.open('GET', \"/hot-reload\", true);\n" +
       "      xobj.onreadystatechange = function () {\n" +
-      "        if (xobj.readyState === 4) {\n" +
-      "          if (xobj.status != \"200\") {\n" +
+      "        if (xobj.readyState === XMLHttpRequest.DONE) {\n" +
+      "          if (xobj.status !== 200) {\n" +
       "            forceReload = true;\n" +
       "            // recheck in a second\n" +
       "            setTimeout(load, 1000);\n" +
@@ -38,7 +36,7 @@ public class HotReloadImpl implements HotReload {
       "            if (forceReload || lastUpdate !== json.uuid) {\n" +
       "              window.location.reload();\n" +
       "            } else {\n" +
-      "              // recheck in a second\n" +
+      "              /* recheck in a second */\n" +
       "              setTimeout(load, 1000);\n" +
       "            }\n" +
       "          }\n" +
@@ -68,66 +66,76 @@ public class HotReloadImpl implements HotReload {
       "    }, false);\n" +
       "\n" +
       "    hotReloadSSE.onerror = function () {\n" +
-      "      // recheck in a second\n" +
+      "       /* chrome keeps retrying while FF not, so we handle this manually */\n" +
+      "       hotReloadSSE.close();\n" +
+      "      /* recheck in a second */\n" +
       "      setTimeout(load, 1000);\n" +
       "    }\n" +
       "  };\n" +
       "  load();\n" +
       "})();\n";
 
-  private final Logger log = LoggerFactory.getLogger(HotReloadImpl.class);
-
   private final AtomicReference<String> payload = new AtomicReference<>();
   private final boolean sse;
+  private final boolean active;
   private final Set<HttpServerResponse> clients;
 
   public HotReloadImpl(boolean sse) {
     this.sse = sse;
-    if (this.sse) {
+    this.active = System.getenv("VERTX_HOT_RELOAD") != null;
+
+    if (this.sse && this.active) {
       clients = new HashSet<>();
     } else {
       clients = null;
     }
-    update();
 
-    final String webpackBuildInfo = System.getProperty("webpack.build.info");
+    if (this.active) {
+      update();
 
-    if (webpackBuildInfo != null) {
-      Thread watcher = new Thread(() -> {
-        try (final WatchService watchService = FileSystems.getDefault().newWatchService()) {
-          // this represents the full file
-          final Path path = FileSystems.getDefault().getPath(webpackBuildInfo);
-          final Path filename = path.getFileName();
-          // we register to the parent only
-          path.getParent().register(watchService, StandardWatchEventKinds.ENTRY_MODIFY);
+      final String webpackBuildInfo = System.getenv("VERTX_HOT_RELOAD");
 
-          while (true) {
-            final WatchKey wk = watchService.take();
-            for (WatchEvent<?> event : wk.pollEvents()) {
-              //we only register "ENTRY_MODIFY" so the context is always a Path.
-              final Path changed = (Path) event.context();
-              if (changed.getFileName().equals(filename)) {
-                update();
+      if (webpackBuildInfo != null && webpackBuildInfo.length() > 0) {
+        Thread watcher = new Thread(() -> {
+          try (final WatchService watchService = FileSystems.getDefault().newWatchService()) {
+            // this represents the full file
+            final Path path = FileSystems.getDefault().getPath(webpackBuildInfo);
+            final Path filename = path.getFileName();
+            // we register to the parent only
+            path.getParent().register(watchService, StandardWatchEventKinds.ENTRY_MODIFY);
+
+            while (true) {
+              final WatchKey wk = watchService.take();
+              for (WatchEvent<?> event : wk.pollEvents()) {
+                //we only register "ENTRY_MODIFY" so the context is always a Path.
+                final Path changed = (Path) event.context();
+                if (changed.getFileName().equals(filename)) {
+                  update();
+                }
               }
+              // reset the key
+              boolean valid = wk.reset();
+              if (!valid) {
+                LOGGER.info("Key has been unregistered");
+                break;
+              }
+              Thread.sleep(300);
             }
-            // reset the key
-            boolean valid = wk.reset();
-            if (!valid) {
-              log.info("Key has been unregistered");
-              break;
-            }
-            Thread.sleep(300);
+          } catch (IOException | InterruptedException e) {
+            LOGGER.error("webpack watch info failed.", e);
           }
-        } catch (IOException | InterruptedException e) {
-          log.error("webpack watch info failed.", e);
-        }
-      });
-      watcher.setDaemon(true);
-      watcher.start();
+        });
+        watcher.setDaemon(true);
+        watcher.start();
+      }
+    } else {
+      LOGGER.info("Hot Reload is disabled!");
     }
   }
 
   private void update() {
+    LOGGER.debug("updating clients");
+
     this.payload.set("{\"uuid\": \"" + UUID.randomUUID().toString() + "\"}");
 
     if (sse) {
@@ -151,7 +159,7 @@ public class HotReloadImpl implements HotReload {
 
   @Override
   public void handle(RoutingContext ctx) {
-    if (ctx.request().method() == HttpMethod.GET) {
+    if (active && ctx.request().method() == HttpMethod.GET) {
       // the check end point
       if ("/hot-reload".equals(ctx.request().path())) {
         if (sse) {

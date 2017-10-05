@@ -20,6 +20,8 @@ package xyz.jetdrone.vertx.hot.reload;
 
 import io.vertx.codegen.annotations.VertxGen;
 import io.vertx.core.Handler;
+import io.vertx.core.logging.Logger;
+import io.vertx.core.logging.LoggerFactory;
 import io.vertx.ext.web.RoutingContext;
 import io.vertx.ext.web.handler.StaticHandler;
 import xyz.jetdrone.vertx.hot.reload.impl.HotReloadImpl;
@@ -44,8 +46,10 @@ import java.lang.reflect.Proxy;
 @VertxGen
 public interface HotReload extends Handler<RoutingContext> {
 
+  Logger LOGGER = LoggerFactory.getLogger(HotReload.class);
+
   /**
-   * Creates a HotReload Handler that will setup 2 endpoints:
+   * If the system property <code>hot.reload</code> is true then it creates a HotReload Handler that will setup 2 endpoints:
    * <p>
    * <ol>
    * <li><pre>/hot-reload</pre> the watch endpoint either a SSE or AJAX endpoint that returns the current deployment id</li>
@@ -53,6 +57,8 @@ public interface HotReload extends Handler<RoutingContext> {
    * </ol>
    * <p>
    * By default it will use the SSE mode.
+   *
+   * Else this is a noop handler (pass through).
    *
    * @return HotReload Handler
    */
@@ -77,7 +83,15 @@ public interface HotReload extends Handler<RoutingContext> {
    */
   static StaticHandler createStaticHandler() {
     // the proxied object
-    final StaticHandler staticHandler = StaticHandler.create()
+    final StaticHandler staticHandler = StaticHandler.create();
+
+    if (System.getenv("VERTX_HOT_RELOAD") == null) {
+      return staticHandler;
+    }
+
+    LOGGER.info("Serving static resources from: " + System.getProperty("user.dir") + "/src/main/resources/" + StaticHandler.DEFAULT_WEB_ROOT);
+
+    staticHandler
       .setAllowRootFileSystemAccess(true)
       .setCachingEnabled(false)
       .setWebRoot(System.getProperty("user.dir") + "/src/main/resources/" + StaticHandler.DEFAULT_WEB_ROOT);
@@ -88,7 +102,14 @@ public interface HotReload extends Handler<RoutingContext> {
       new Class[]{StaticHandler.class},
       (Object proxy, Method method, Object[] args) -> {
         if ("setWebRoot".equals(method.getName())) {
-          staticHandler.setWebRoot(System.getProperty("user.dir") + "/src/main/resources/" + args[0].toString());
+          String webroot = args[0].toString();
+          if (webroot.length() > 0 && webroot.charAt(0) != '/') {
+            LOGGER.info("Serving static resources from: " + System.getProperty("user.dir") + "/src/main/resources/" + args[0].toString());
+            staticHandler.setWebRoot(System.getProperty("user.dir") + "/src/main/resources/" + args[0].toString());
+          } else {
+            LOGGER.warn("Serving (non watched) static resources from: " + webroot);
+            staticHandler.setWebRoot(webroot);
+          }
         } else {
           method.invoke(staticHandler, args);
         }
