@@ -1,5 +1,6 @@
 package xyz.jetdrone.vertx.hot.reload.impl;
 
+import io.vertx.core.Vertx;
 import io.vertx.core.http.HttpMethod;
 import io.vertx.core.http.HttpServerResponse;
 import io.vertx.ext.web.RoutingContext;
@@ -76,6 +77,7 @@ public class HotReloadImpl implements HotReload {
       "})();\n";
 
   private final AtomicReference<String> payload = new AtomicReference<>();
+  private final AtomicReference<Vertx> vertx = new AtomicReference<>();
   private final boolean sse;
   private final boolean active;
   private final Set<HttpServerResponse> clients;
@@ -100,9 +102,21 @@ public class HotReloadImpl implements HotReload {
           try (final WatchService watchService = FileSystems.getDefault().newWatchService()) {
             // this represents the full file
             final Path path = FileSystems.getDefault().getPath(webpackBuildInfo);
+            // if the watched file does not exist warn about it!
+            if (!path.toFile().exists()) {
+              LOGGER.warn("Watched file (" + webpackBuildInfo + ") does not exist!");
+            }
             final Path filename = path.getFileName();
+            final Path parent = path.getParent();
+
+            // if the watched parent does not exist we can't continue!
+            if (!parent.toFile().exists()) {
+              LOGGER.error("Watched dir (" + parent + ") does not exist watching is disabled.");
+              return;
+            }
+
             // we register to the parent only
-            path.getParent().register(watchService, StandardWatchEventKinds.ENTRY_MODIFY);
+            parent.register(watchService, StandardWatchEventKinds.ENTRY_MODIFY);
 
             while (true) {
               final WatchKey wk = watchService.take();
@@ -121,7 +135,7 @@ public class HotReloadImpl implements HotReload {
               }
               Thread.sleep(300);
             }
-          } catch (IOException | InterruptedException e) {
+          } catch (IOException | InterruptedException | UnsupportedOperationException e) {
             LOGGER.error("webpack watch info failed.", e);
           }
         });
@@ -163,6 +177,17 @@ public class HotReloadImpl implements HotReload {
       // the check end point
       if ("/hot-reload".equals(ctx.request().path())) {
         if (sse) {
+          if (vertx.compareAndSet(null, ctx.vertx())) {
+            vertx.get().setPeriodic(15_000L, p -> {
+              for (HttpServerResponse client : clients) {
+                if (!client.ended()) {
+                  client.write(
+                    "event: ping\n" +
+                    "data: {\"ping\": \"" + this.hashCode() + "\"}\n\n");
+                }
+              }
+            });
+          }
           addClient(ctx.response())
             .putHeader("Content-Type", "text/event-stream")
             .putHeader("Cache-Control", "no-cache")
