@@ -19,15 +19,9 @@ it can be configured to perform HTTP pooling.
 
 ### static handler
 
-A static handler will be returned using this factory. If the environment variable
-`VERTX_HOT_RELOAD` is set then the static handler is wrapped to serve resources
-from:
-
-```java
-System.getProperty("user.dir") + "/src/main/resources/" + DEFAULT_WEB_ROOT
-```
-
-And caching of resources is disabled.
+A static handler will be returned using this factory. If there is a
+file named `.hot-reload` on the current working directory then the static
+handler is configured to not cache both the filesystem and the http responses.
 
 ## How to configure?
 
@@ -40,10 +34,10 @@ final Router router = Router.router(vertx);
 router.get().handler(HotReload.create());
 ...
 // Serve the static resources
-router.route().handler(HotReload.createStaticHandler());
+router.route().handler(StaticHandler.create());
 ```
 
-When the environment variable `VERTX_HOT_RELOAD` is not defined the first handler will
+When there isn't a file named `.hot-reload` in the current working directory the handler will
 be a NO-OP handler and the last will return a unmodified `StaticHandler`.
 
 In your html application you should have:
@@ -59,18 +53,18 @@ In your html application you should have:
 
 ## How it works?
 
-When you start your application you should pass the required environment variable in order
-to trigger the handler to operate in hot reload mode e.g.:
+When you start your application you should have the control file in the current working directory e.g.:
 
 ```bash
-VERTX_HOT_RELOAD="/tmp/watch-me.tmp" java -jar target/fatjar.jar
+touch .hot-reload
+java -jar target/fatjar.jar
 ```
 
 Navigate to your HTML page where you loaded the script, and after that update the contents
 of the reload control file e.g.:
 
 ```bash
-echo "update!" > "/tmp/watch-me.tmp"
+echo "update!" >> .hot-reload
 ```
 
 You will notice that a reload is triggered on the browser.

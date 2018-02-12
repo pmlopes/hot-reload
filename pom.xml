@@ -40,7 +40,7 @@
   </licenses>
 
   <properties>
-    <vertx.version>3.5.0</vertx.version>
+    <vertx.version>3.5.1</vertx.version>
     <maven.compiler.source>1.8</maven.compiler.source>
     <maven.compiler.testTarget>1.8</maven.compiler.testTarget>
     <maven.compiler.testSource>1.8</maven.compiler.testSource>
