@@ -13,7 +13,7 @@
 
   <groupId>xyz.jetdrone</groupId>
   <artifactId>hot-reload</artifactId>
-  <version>0.0.4</version>
+  <version>0.0.5</version>
 
   <packaging>jar</packaging>
 
@@ -40,7 +40,7 @@
   </licenses>
 
   <properties>
-    <vertx.version>3.4.2</vertx.version>
+    <vertx.version>3.5.1</vertx.version>
     <maven.compiler.source>1.8</maven.compiler.source>
     <maven.compiler.testTarget>1.8</maven.compiler.testTarget>
     <maven.compiler.testSource>1.8</maven.compiler.testSource>
@@ -52,7 +52,6 @@
       <groupId>io.vertx</groupId>
       <artifactId>vertx-web</artifactId>
       <version>${vertx.version}</version>
-      <scope>provided</scope>
     </dependency>
 
     <dependency>

@@ -1,10 +1,12 @@
 package xyz.jetdrone.vertx.hot.reload.impl;
 
+import io.vertx.core.Vertx;
 import io.vertx.core.http.HttpMethod;
 import io.vertx.core.http.HttpServerResponse;
 import io.vertx.ext.web.RoutingContext;
 import xyz.jetdrone.vertx.hot.reload.HotReload;
 
+import java.io.File;
 import java.io.IOException;
 import java.nio.file.*;
 import java.util.*;
@@ -76,13 +78,16 @@ public class HotReloadImpl implements HotReload {
       "})();\n";
 
   private final AtomicReference<String> payload = new AtomicReference<>();
+  private final AtomicReference<Vertx> vertx = new AtomicReference<>();
   private final boolean sse;
   private final boolean active;
   private final Set<HttpServerResponse> clients;
 
   public HotReloadImpl(boolean sse) {
+    final File control = new File(System.getProperty("user.dir"), ".hot-reload");
+
     this.sse = sse;
-    this.active = System.getenv("VERTX_HOT_RELOAD") != null;
+    this.active = control.exists();
 
     if (this.sse && this.active) {
       clients = new HashSet<>();
@@ -93,41 +98,41 @@ public class HotReloadImpl implements HotReload {
     if (this.active) {
       update();
 
-      final String webpackBuildInfo = System.getenv("VERTX_HOT_RELOAD");
+      Thread watcher = new Thread(() -> {
+        try (final WatchService watchService = FileSystems.getDefault().newWatchService()) {
+          // this represents the full file
+          final Path path = control.toPath();
 
-      if (webpackBuildInfo != null && webpackBuildInfo.length() > 0) {
-        Thread watcher = new Thread(() -> {
-          try (final WatchService watchService = FileSystems.getDefault().newWatchService()) {
-            // this represents the full file
-            final Path path = FileSystems.getDefault().getPath(webpackBuildInfo);
-            final Path filename = path.getFileName();
-            // we register to the parent only
-            path.getParent().register(watchService, StandardWatchEventKinds.ENTRY_MODIFY);
+          final Path filename = path.getFileName();
+          final Path parent = path.getParent();
 
-            while (true) {
-              final WatchKey wk = watchService.take();
-              for (WatchEvent<?> event : wk.pollEvents()) {
-                //we only register "ENTRY_MODIFY" so the context is always a Path.
-                final Path changed = (Path) event.context();
-                if (changed.getFileName().equals(filename)) {
-                  update();
-                }
+          // we register to the parent only
+          parent.register(watchService, StandardWatchEventKinds.ENTRY_MODIFY);
+
+          while (true) {
+            final WatchKey wk = watchService.take();
+            for (WatchEvent<?> event : wk.pollEvents()) {
+              //we only register "ENTRY_MODIFY" so the context is always a Path.
+              final Path changed = (Path) event.context();
+              if (changed.getFileName().equals(filename)) {
+                update();
               }
-              // reset the key
-              boolean valid = wk.reset();
-              if (!valid) {
-                LOGGER.info("Key has been unregistered");
-                break;
-              }
-              Thread.sleep(300);
             }
-          } catch (IOException | InterruptedException e) {
-            LOGGER.error("webpack watch info failed.", e);
+            // reset the key
+            boolean valid = wk.reset();
+            if (!valid) {
+              LOGGER.info("Key has been unregistered");
+              break;
+            }
+            Thread.sleep(300);
           }
-        });
-        watcher.setDaemon(true);
-        watcher.start();
-      }
+        } catch (IOException | InterruptedException | UnsupportedOperationException e) {
+          LOGGER.error("webpack watch info failed.", e);
+        }
+      });
+      watcher.setDaemon(true);
+      watcher.start();
+
     } else {
       LOGGER.info("Hot Reload is disabled!");
     }
@@ -163,6 +168,17 @@ public class HotReloadImpl implements HotReload {
       // the check end point
       if ("/hot-reload".equals(ctx.request().path())) {
         if (sse) {
+          if (vertx.compareAndSet(null, ctx.vertx())) {
+            vertx.get().setPeriodic(15_000L, p -> {
+              for (HttpServerResponse client : clients) {
+                if (!client.ended()) {
+                  client.write(
+                    "event: ping\n" +
+                    "data: {\"ping\": \"" + this.hashCode() + "\"}\n\n");
+                }
+              }
+            });
+          }
           addClient(ctx.response())
             .putHeader("Content-Type", "text/event-stream")
             .putHeader("Cache-Control", "no-cache")
@@ -179,15 +195,23 @@ public class HotReloadImpl implements HotReload {
         }
         return;
       }
-
-      // the script end point
-      if ("/hot-reload/script".equals(ctx.request().path())) {
-        ctx.response()
-          .putHeader("Content-Type", "application/javascript")
-          .end(sse ? SSE_SCRIPT : SCRIPT);
-        return;
-      }
     }
+
+    // the script end point (if inactive does nothing so it won't return 404 responses)
+    if ("/hot-reload/script".equals(ctx.request().path())) {
+      ctx.response()
+        .putHeader("Content-Type", "application/javascript");
+
+      if (active) {
+        ctx.response()
+          .end(sse ? SSE_SCRIPT : SCRIPT);
+      } else {
+        ctx.response()
+          .end();
+      }
+      return;
+    }
+
     // nothing to see here, continue...
     ctx.next();
   }

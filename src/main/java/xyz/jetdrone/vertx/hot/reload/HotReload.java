@@ -23,11 +23,7 @@ import io.vertx.core.Handler;
 import io.vertx.core.logging.Logger;
 import io.vertx.core.logging.LoggerFactory;
 import io.vertx.ext.web.RoutingContext;
-import io.vertx.ext.web.handler.StaticHandler;
 import xyz.jetdrone.vertx.hot.reload.impl.HotReloadImpl;
-
-import java.lang.reflect.Method;
-import java.lang.reflect.Proxy;
 
 /**
  * A Simple Hot Reload for Eclipse Vert.x Web.
@@ -75,46 +71,5 @@ public interface HotReload extends Handler<RoutingContext> {
    */
   static HotReload create(boolean sse) {
     return new HotReloadImpl(sse);
-  }
-
-  /**
-   * Creates a StaticHandler that will be configured to be non cached and point to the path src/main/resouces + webroot
-   * @return StaticHandler
-   */
-  static StaticHandler createStaticHandler() {
-    // the proxied object
-    final StaticHandler staticHandler = StaticHandler.create();
-
-    if (System.getenv("VERTX_HOT_RELOAD") == null) {
-      return staticHandler;
-    }
-
-    LOGGER.info("Serving static resources from: " + System.getProperty("user.dir") + "/src/main/resources/" + StaticHandler.DEFAULT_WEB_ROOT);
-
-    staticHandler
-      .setAllowRootFileSystemAccess(true)
-      .setCachingEnabled(false)
-      .setWebRoot(System.getProperty("user.dir") + "/src/main/resources/" + StaticHandler.DEFAULT_WEB_ROOT);
-
-    // we return a proxy to the static handler to safeguard any calls to setWebroot later on...
-    return (StaticHandler) Proxy.newProxyInstance(
-      StaticHandler.class.getClassLoader(),
-      new Class[]{StaticHandler.class},
-      (Object proxy, Method method, Object[] args) -> {
-        if ("setWebRoot".equals(method.getName())) {
-          String webroot = args[0].toString();
-          if (webroot.length() > 0 && webroot.charAt(0) != '/') {
-            LOGGER.info("Serving static resources from: " + System.getProperty("user.dir") + "/src/main/resources/" + args[0].toString());
-            staticHandler.setWebRoot(System.getProperty("user.dir") + "/src/main/resources/" + args[0].toString());
-          } else {
-            LOGGER.warn("Serving (non watched) static resources from: " + webroot);
-            staticHandler.setWebRoot(webroot);
-          }
-        } else {
-          method.invoke(staticHandler, args);
-        }
-
-        return proxy;
-      });
   }
 }
